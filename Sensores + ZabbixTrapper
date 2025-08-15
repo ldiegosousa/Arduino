@@ -1,0 +1,86 @@
+#include <Ethernet.h>
+#include <SPI.h>
+#include <DHT.h>
+
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x01 };
+IPAddress ip(192, 168, 0, 9);
+IPAddress serverZabbix(192, 168, 0, 2); // IP Zabbix
+EthernetClient zabbixClient;
+
+#define ZABBIX_PORT 10051
+#define HOSTNAME_ZABBIX "ArduinoMonitor"
+
+#define DHTPIN 3
+#define DHTTYPE DHT22
+#define PORTA_PIN 4
+
+DHT dht(DHTPIN, DHTTYPE);
+int ultimoEstadoPorta = HIGH;
+
+// Função para enviar ao Zabbix
+void sendToZabbix(String key, String value) {
+  if (zabbixClient.connect(serverZabbix, ZABBIX_PORT)) {
+    String json = "{\"request\":\"sender data\",\"data\":[{\"host\":\"";
+    json += HOSTNAME_ZABBIX;
+    json += "\",\"key\":\"";
+    json += key;
+    json += "\",\"value\":\"";
+    json += value;
+    json += "\"}]}";
+
+    // Cabeçalho do protocolo Zabbix
+    byte header[13] = {
+      'Z','B','X','D',        // assinatura
+      0x01,                   // Versão do protocolo
+      0,0,0,0,                // Tamanho do payload (4 bytes little endian)
+      0,0,0,0                 // (complemento)
+    };
+
+    uint32_t payloadSize = json.length();
+    header[5] = (byte)(payloadSize);
+    header[6] = (byte)(payloadSize >> 8);
+    header[7] = (byte)(payloadSize >> 16);
+    header[8] = (byte)(payloadSize >> 24);
+
+    // Envia cabeçalho e depois o JSON
+    zabbixClient.write(header, 13);
+    zabbixClient.print(json);
+
+    zabbixClient.stop();
+    Serial.println("Enviado ao Zabbix: " + json);
+  } else {
+    Serial.println("Falha na conexão com o Zabbix");
+  }
+}
+
+void setup() {
+  Ethernet.begin(mac, ip);
+  dht.begin();
+  pinMode(PORTA_PIN, INPUT_PULLUP);
+  Serial.begin(9600);
+}
+
+void loop() {
+  delay(5000);
+
+  float temp = dht.readTemperature();
+  float umid = dht.readHumidity();
+
+  if (isnan(temp) || isnan(umid)) {
+    Serial.println("Erro na leitura do DHT");
+    return;
+  }
+
+  int portaEstado = digitalRead(PORTA_PIN);
+  String portaTexto = (portaEstado == LOW) ? "ABERTA" : "FECHADA";
+
+  Serial.print("Temp: "); Serial.println(temp);
+  Serial.print("Umid: "); Serial.println(umid);
+  Serial.print("Porta: "); Serial.println(portaTexto);
+
+  // Enviar para Zabbix
+  sendToZabbix("sensor.temp", String(temp));
+  sendToZabbix("sensor.umid", String(umid));
+  sendToZabbix("sensor.porta", portaTexto);
+}
+
